@@ -1,0 +1,85 @@
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+// Reset controller registers
+#define RESETS_BASE            0x4000c000
+#define RESETS_RESET          ((volatile uint32_t*)(RESETS_BASE + 0x0))
+#define RESETS_RESET_DONE     ((volatile uint32_t*)(RESETS_BASE + 0x8))
+
+// GPIO registers
+#define SIO_BASE              0xd0000000
+#define GPIO_BASE             0x40014000
+#define GPIO_CTRL_REG(n)     ((volatile uint32_t*)(GPIO_BASE + 8 * (n) + 4))
+#define SIO_GPIO_OUT_SET     ((volatile uint32_t*)(SIO_BASE + 0x14))
+#define SIO_GPIO_OUT_CLR     ((volatile uint32_t*)(SIO_BASE + 0x18))
+#define SIO_GPIO_OE_SET      ((volatile uint32_t*)(SIO_BASE + 0x24))
+#define SIO_GPIO_IN         ((volatile uint32_t*)(SIO_BASE + 0x04))
+
+#define LED_GREEN_PIN   15
+#define LED_RED_PIN     14
+#define STATE_PIN      16
+
+void delay_ms(uint32_t ms) {
+    for (volatile uint32_t i = 0; i < ms * 12000; i++) {
+        __asm("nop");
+    }
+}
+
+void my_gpio_init() {
+    // Take GPIO out of reset
+    *RESETS_RESET &= ~(1 << 5);
+    while (!(*RESETS_RESET_DONE & (1 << 5)));
+
+    // Set GPIO function for LED pins
+    *GPIO_CTRL_REG(LED_GREEN_PIN) = 5;  // SIO function
+    *GPIO_CTRL_REG(LED_RED_PIN) = 5;    // SIO function
+    *GPIO_CTRL_REG(STATE_PIN) = 5;     // SIO function
+    // Set as outputs
+    *SIO_GPIO_OE_SET = (1 << LED_GREEN_PIN) | (1 << LED_RED_PIN);
+}
+
+int main() {
+    my_gpio_init();
+    bool current_state = 0;
+    bool prev_switch_state = 0;
+    bool switch_state;
+    uint32_t timer_count = 0;
+    uint32_t led_green_state = 0;
+
+    while(1) {
+        switch_state = (*SIO_GPIO_IN >> STATE_PIN) & 1;
+        
+        if (switch_state && !prev_switch_state) {
+            current_state = !current_state;
+        }
+        prev_switch_state = switch_state;
+        
+        // Control red LED based on state
+        if (current_state) {
+            *SIO_GPIO_OUT_CLR = (1 << LED_RED_PIN);
+        } else {
+            *SIO_GPIO_OUT_SET = (1 << LED_RED_PIN);
+            *SIO_GPIO_OUT_CLR = (1 << LED_GREEN_PIN);
+        }
+
+        // Control green LED blinking
+        if (current_state) {
+            *SIO_GPIO_OUT_CLR = (1 << LED_RED_PIN);
+            timer_count++;
+            if (timer_count >= 500) {
+                led_green_state = !led_green_state;
+                if (led_green_state) {
+                    *SIO_GPIO_OUT_SET = (1 << LED_GREEN_PIN);
+                } else {
+                    *SIO_GPIO_OUT_CLR = (1 << LED_GREEN_PIN);
+                }
+                timer_count = 0;
+            }
+        }
+        
+        delay_ms(1);
+    }
+
+    return 0;
+}
